@@ -11,3 +11,5 @@ __pycache__/
 
 datasets
 !datasets/.gitkeep
+mattersim_build
+slurm/
