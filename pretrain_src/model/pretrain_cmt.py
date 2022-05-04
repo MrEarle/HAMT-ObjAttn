@@ -70,6 +70,33 @@ class ItmPrediction(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class ObjectClassification(nn.Module):
+    def __init__(self, hidden_size, label_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            BertLayerNorm(hidden_size, eps=1e-12),
+            nn.Linear(hidden_size, label_dim)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class RoomClassification(nn.Module):
+    def __init__(self, hidden_size, label_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            BertLayerNorm(hidden_size, eps=1e-12),
+            nn.Linear(hidden_size, label_dim)
+        )
+
+    def forward(self, x):
+        return self.net(x.mean(dim=1))
+
+
 class MultiStepNavCMTPreTraining(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
@@ -89,6 +116,10 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
             self.image_classifier = RegionClassification(self.config.hidden_size, self.config.image_prob_size)
         if 'itm' in config.pretrain_tasks:
             self.itm_head = ItmPrediction(self.config.hidden_size)
+        if 'obj' in config.pretrain_tasks:
+            self.obj_head = ObjectClassification(self.config.hidden_size, self.config.obj_num_labels)
+        if 'room' in config.pretrain_tasks:
+            self.room_head = RoomClassification(self.config.hidden_size, self.config.room_num_labels)
         
         self.init_weights()
         self.tie_weights()
@@ -111,6 +142,7 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
                                     batch['ob_img_fts'], batch['ob_ang_fts'], 
                                     batch['ob_nav_types'], batch['ob_masks'],
+                                    batch['obj_img_fts'], batch['obj_ang_fts'], batch['obj_head_masks'],
                                     batch['ob_action_viewindex'], compute_loss)
         elif task.startswith('sar'):
             return self.forward_sar(batch['txt_ids'], batch['txt_masks'],
@@ -118,6 +150,7 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
                                     batch['ob_img_fts'], batch['ob_ang_fts'], 
                                     batch['ob_nav_types'], batch['ob_masks'],
+                                    batch['obj_img_fts'], batch['obj_ang_fts'], batch['obj_head_masks'],
                                     batch['ob_action_angles'], batch['ob_progress'], compute_loss)
         elif task.startswith('sprel'):
             return self.forward_sprel(batch['txt_ids'], batch['txt_masks'],
@@ -125,6 +158,7 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
                                     batch['ob_img_fts'], batch['ob_ang_fts'], 
                                     batch['ob_nav_types'], batch['ob_masks'],
+                                    batch['obj_img_fts'], batch['obj_ang_fts'], batch['obj_head_masks'],
                                     batch['sp_anchor_idxs'], batch['sp_targets'], 
                                     compute_loss)
         elif task.startswith('mrc'):
@@ -136,15 +170,27 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
             return self.forward_itm(batch['txt_ids'], batch['txt_masks'],
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'], 4, compute_loss)
+        elif task.startswith('obj'):
+            return self.forward_obj(batch['txt_ids'], batch['txt_masks'],
+                                    batch['hist_img_fts'], batch['hist_ang_fts'],
+                                    batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
+                                    batch['obj_img_fts'], batch['obj_ang_fts'], batch['obj_head_masks'],
+                                    batch['obj_labels'], compute_loss)
+        elif task.startswith('room'):
+            return self.forward_room(batch['txt_ids'], batch['txt_masks'],
+                                    batch['hist_img_fts'], batch['hist_ang_fts'],
+                                    batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
+                                    batch['obj_img_fts'], batch['obj_ang_fts'], batch['obj_head_masks'],
+                                    batch['room_labels'], compute_loss)
         else:
             raise ValueError('invalid task')
 
     def forward_mlm(self, txt_ids, txt_masks, 
                     hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks, 
                     txt_labels, compute_loss):
-        txt_embeds, _, _ = self.bert(txt_ids, txt_masks, 
+        txt_embeds, _, _, _ = self.bert(txt_ids, txt_masks, 
             hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks,
-            None, None, None, None)
+            None, None, None, None, None, None, None)
 
         # only compute masked tokens for better efficiency
         masked_output = self._compute_masked_hidden(txt_embeds, txt_labels != -1)
@@ -166,11 +212,12 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
 
     def forward_sap(self, txt_ids, txt_masks, 
                     hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks, 
-                    ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks, 
-                    act_labels, compute_loss):
-        txt_embeds, hist_embeds, ob_embeds = self.bert(txt_ids, txt_masks, 
+                    ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks,
+                    obj_img_fts, obj_ang_fts, obj_masks,
+                    act_labels, compute_loss): #! Added params
+        txt_embeds, hist_embeds, ob_embeds, obj_embeds = self.bert(txt_ids, txt_masks, 
             hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks,
-            ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks)
+            ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks, obj_img_fts, obj_ang_fts, obj_masks)
         
         # combine text and visual to predict next action
         prediction_scores = self.next_action(ob_embeds * txt_embeds[:, :1]).squeeze(-1)
@@ -185,10 +232,11 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
     def forward_sar(self, txt_ids, txt_masks, 
                     hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks, 
                     ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks, 
-                    ob_act_angles, ob_progress, compute_loss):
-        txt_embeds, hist_embeds, ob_embeds = self.bert(txt_ids, txt_masks, 
+                    obj_img_fts, obj_ang_fts, obj_masks,
+                    ob_act_angles, ob_progress, compute_loss): #! Added params
+        txt_embeds, hist_embeds, ob_embeds, obj_embeds = self.bert(txt_ids, txt_masks, 
             hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks,
-            ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks)
+            ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks, obj_img_fts, obj_ang_fts, obj_masks)
 
         prediction_scores = self.regress_action(txt_embeds[:, 0])   # [CLS] token
 
@@ -201,11 +249,12 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
 
     def forward_sprel(self, txt_ids, txt_masks, 
                     hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks, 
-                    ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks, 
+                    ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks,
+                    obj_img_fts, obj_ang_fts, obj_masks,  #! Added params
                     sp_anchor_idxs, sp_targets, compute_loss):
-        txt_embeds, hist_embeds, ob_embeds = self.bert(txt_ids, txt_masks, 
+        txt_embeds, hist_embeds, ob_embeds, _ = self.bert(txt_ids, txt_masks, 
             hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks,
-            ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks)
+            ob_img_fts, ob_ang_fts, ob_nav_types, ob_masks, obj_img_fts, obj_ang_fts, obj_masks)
 
         # img_embeds: (batch, views, dim), sp_anchor_idxs: (batch)
         anchor_ob_embeds = torch.gather(ob_embeds, 1, 
@@ -224,9 +273,9 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
     def forward_mrc(self, txt_ids, txt_masks, 
                     hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks, 
                     hist_mrc_masks, hist_img_probs, compute_loss=True):
-        txt_embeds, hist_embeds, _ = self.bert(txt_ids, txt_masks, 
+        txt_embeds, hist_embeds, _, _ = self.bert(txt_ids, txt_masks, 
             hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks,
-            None, None, None, None)
+            None, None, None, None, None, None, None)
 
         # only compute masked regions for better efficient=cy
         hist_embeds = hist_embeds[:, 1:] # remove global embedding
@@ -260,3 +309,49 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
             return sprel_loss
         else:
             return prediction_scores, itm_targets
+
+    def forward_obj(self, txt_ids, txt_masks,
+                    hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks, 
+                    obj_img_fts, obj_ang_fts, obj_masks,
+                    obj_labels, compute_loss):
+        _, _, _, obj_embeds = self.bert(txt_ids, txt_masks, 
+            hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks,
+            None, None, None, None, obj_img_fts, obj_ang_fts, obj_masks)
+
+        # obj embeds: [batch, num_objs, dim]
+        flattened_obj_embeds = obj_embeds.reshape((-1, obj_embeds.size(-1)))
+        
+        # obj labels: [batch, num_objs]
+        flattened_obj_labels = obj_labels.reshape((-1, ))
+
+        # prediction_scores: [batch * num_objs, label_dim]
+        prediction_scores = self.obj_head(flattened_obj_embeds)
+
+        if compute_loss:
+            mask_loss = F.cross_entropy(prediction_scores, 
+                                        flattened_obj_labels, 
+                                        reduction='none')
+            return mask_loss
+        else:
+            return prediction_scores
+
+    def forward_room(self, txt_ids, txt_masks,
+                    hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks, 
+                    obj_img_fts, obj_ang_fts, obj_masks,
+                    room_labels, compute_loss):
+        _, _, _, obj_embeds = self.bert(txt_ids, txt_masks, 
+            hist_img_fts, hist_ang_fts, hist_pano_img_fts, hist_pano_ang_fts, hist_masks,
+            None, None, None, None, obj_img_fts, obj_ang_fts, obj_masks)
+
+        # obj embeds: [batch, num_objs, dim]
+        # room labels: [batch, 1]
+        # prediction_scores: [batch, label_dim]
+        prediction_scores = self.room_head(obj_embeds)
+
+        if compute_loss:
+            mask_loss = F.cross_entropy(prediction_scores, 
+                                        room_labels.squeeze(), 
+                                        reduction='none')
+            return mask_loss
+        else:
+            return prediction_scores

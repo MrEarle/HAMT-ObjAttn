@@ -435,8 +435,15 @@ class LxmertEncoder(nn.Module):
             [LXRTXLayer(config) for _ in range(self.num_x_layers)]
         )
 
+        if config.include_objects:
+            self.num_o_layers = config.num_o_layers
+            self.o_layers = nn.ModuleList(
+                [BertLayer(config) for _ in range(self.num_o_layers)]
+            ) if self.num_o_layers > 0 else None
+
     def forward(self, txt_embeds, extended_txt_masks, hist_embeds,
-                extended_hist_masks, img_embeds=None, extended_img_masks=None):
+                extended_hist_masks, img_embeds=None, extended_img_masks=None,
+                obj_embeds=None, extended_obj_masks=None):
         # text encoding
         for layer_module in self.layer:
             temp_output = layer_module(txt_embeds, extended_txt_masks)
@@ -451,6 +458,8 @@ class LxmertEncoder(nn.Module):
                 for layer_module in self.r_layers:
                     temp_output = layer_module(img_embeds, extended_img_masks)
                     img_embeds = temp_output[0]
+        img_max_len = 0 if img_embeds is None else img_embeds.size(1)
+            
 
         # history encoding
         if self.h_layers is not None:
@@ -458,6 +467,14 @@ class LxmertEncoder(nn.Module):
                 temp_output = layer_module(hist_embeds, extended_hist_masks)
                 hist_embeds = temp_output[0]
         hist_max_len = hist_embeds.size(1)
+
+        # object encoding
+        if obj_embeds is not None:
+            # extended_obj_head_masks: mask padding for non included objects
+            if self.o_layers is not None:
+                for layer_module in self.o_layers:
+                    temp_output = layer_module(obj_embeds, extended_obj_masks)
+                    obj_embeds = temp_output[0]
         
         # cross-modal encoding
         if img_embeds is None:
@@ -467,6 +484,10 @@ class LxmertEncoder(nn.Module):
             hist_img_embeds = torch.cat([hist_embeds, img_embeds], 1)
             extended_hist_img_masks = torch.cat([extended_hist_masks, extended_img_masks], -1)
 
+        if obj_embeds is not None:
+            hist_img_embeds = torch.cat([hist_img_embeds, obj_embeds], 1)
+            extended_hist_img_masks = torch.cat([extended_hist_img_masks, extended_obj_masks], -1)
+
         for layer_module in self.x_layers:
             txt_embeds, hist_img_embeds = layer_module(
                 txt_embeds, extended_txt_masks, 
@@ -474,8 +495,18 @@ class LxmertEncoder(nn.Module):
 
         hist_embeds = hist_img_embeds[:, :hist_max_len]
         if img_embeds is not None:
-            img_embeds = hist_img_embeds[:, hist_max_len:]
-        return txt_embeds, hist_embeds, img_embeds
+            if obj_embeds is None:
+                img_embeds = hist_img_embeds[:, hist_max_len:]
+            else:
+                img_embeds = hist_img_embeds[:, hist_max_len:hist_max_len+img_max_len]
+
+        if obj_embeds is not None:
+            if img_embeds is None:
+                obj_embeds = hist_img_embeds[:, hist_max_len:]
+            else:
+                obj_embeds = hist_img_embeds[:, hist_max_len+img_max_len:]
+
+        return txt_embeds, hist_embeds, img_embeds, obj_embeds
 
 
 
@@ -581,6 +612,10 @@ class NavPreTrainedModel(BertPreTrainedModel):
         super().__init__(config)
         self.embeddings = BertEmbeddings(config)
         self.img_embeddings = ImageEmbeddings(config)
+
+        if config.include_objects:
+            self.obj_embeddings = ImageEmbeddings(config)
+
         # share image encoding
         self.hist_embeddings = HistoryEmbeddings(config)
 
@@ -588,9 +623,12 @@ class NavPreTrainedModel(BertPreTrainedModel):
 
         self.init_weights()
 
-    def forward(self, txt_ids, txt_masks, 
-                hist_img_feats, hist_ang_feats, hist_pano_img_feats, hist_pano_ang_feats, hist_masks,
-                ob_img_feats, ob_ang_feats, ob_nav_types, ob_masks):
+    def forward(self,
+        txt_ids, txt_masks, 
+        hist_img_feats, hist_ang_feats, hist_pano_img_feats, hist_pano_ang_feats, hist_masks,
+        ob_img_feats, ob_ang_feats, ob_nav_types, ob_masks,
+        obj_img_feats, obj_ang_feats, obj_masks,
+    ):
         batch_size = txt_ids.size(0)
 
         # text embedding
@@ -629,13 +667,29 @@ class NavPreTrainedModel(BertPreTrainedModel):
         else:
             ob_embeds, extended_ob_masks = None, None
 
+        if obj_img_feats is not None:
+            # Object type = 3
+            obj_token_type_ids = torch.ones(batch_size, 1, dtype=torch.long, device=self.device) * 3
+            obj_embeds = self.obj_embeddings(
+                obj_img_feats,
+                obj_ang_feats,
+                self.embeddings.token_type_embeddings(obj_token_type_ids)
+            )
+            extended_obj_head_masks = obj_masks.unsqueeze(1).unsqueeze(2)
+            extended_obj_head_masks = extended_obj_head_masks.to(dtype=self.dtype)
+            extended_obj_head_masks = (1.0 - extended_obj_head_masks) * -10000.0
+        else:
+            obj_embeds, extended_obj_head_masks = None, None
+
         # multi-modal encoding
-        txt_embeds, hist_embeds, ob_embeds = self.encoder(
+        txt_embeds, hist_embeds, ob_embeds, obj_embeds = self.encoder(
             txt_embeds, extended_txt_masks, 
             hist_embeds, extended_hist_masks,
-            ob_embeds, extended_ob_masks)
+            ob_embeds, extended_ob_masks,
+            obj_embeds, extended_obj_head_masks
+        )
 
-        return txt_embeds, hist_embeds, ob_embeds
+        return txt_embeds, hist_embeds, ob_embeds, obj_embeds
 
     def forward_itm(self, txt_ids, txt_masks, 
                 hist_img_feats, hist_ang_feats, hist_pano_img_feats, hist_pano_ang_feats, hist_masks,

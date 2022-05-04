@@ -299,6 +299,8 @@ class SapDataset(Dataset):
         self.sep_token_id = self.tok.sep_token_id   # 102
         self.pad_token_id = self.tok.pad_token_id   # 0
 
+        self.include_objects = bool(self.nav_db.obj_feat_file)
+
     def __len__(self):
         return len(self.nav_db.traj_step_refer)
 
@@ -307,7 +309,9 @@ class SapDataset(Dataset):
 
         inputs = self.nav_db.get_input(i_traj, j_instr, t_cur,
             return_ob=True, return_ob_action=True, 
-            return_hist_img_probs=False, return_ob_progress=False)
+            return_hist_img_probs=False, return_ob_progress=False,
+            return_objs=self.include_objects
+        )
 
         output = {}
 
@@ -337,7 +341,13 @@ class SapDataset(Dataset):
         if 'hist_pano_img_fts' in inputs:
             output['hist_pano_img_fts'] = torch.from_numpy(inputs['hist_pano_img_fts'])
             output['hist_pano_ang_fts'] = torch.from_numpy(inputs['hist_pano_ang_fts'])
-        output['hist_lens'] = inputs['hist_lens'] 
+        output['hist_lens'] = inputs['hist_lens']
+
+        if 'obj_img_fts' in inputs:
+            output['obj_img_fts'] = torch.from_numpy(inputs['obj_img_fts'])
+            output['obj_ang_fts'] = torch.from_numpy(inputs['obj_ang_fts'])
+            output['obj_head_masks'] = torch.from_numpy(inputs['obj_head_masks'])
+
         return output
 
 def sap_collate(inputs):
@@ -376,6 +386,17 @@ def sap_collate(inputs):
 
     # action batches
     batch['ob_action_viewindex'] = torch.LongTensor(batch['ob_action_viewindex'])
+
+    # object batches
+    if 'obj_img_fts' in batch:
+        batch['obj_img_fts'] = torch.stack(batch['obj_img_fts'])
+        batch['obj_ang_fts'] = torch.stack(batch['obj_ang_fts'])
+
+        # Mask out padding objects for one time step
+        batch['obj_head_masks'] = torch.stack(batch['obj_head_masks'])
+
+        # ! For time step padding, ob_masks are reused.
+
     return batch
 
 
@@ -392,15 +413,19 @@ class SarDataset(Dataset):
         self.sep_token_id = self.tok.sep_token_id   # 102
         self.pad_token_id = self.tok.pad_token_id   # 0
 
+        self.include_objects = bool(self.nav_db.obj_feat_file)
+
     def __len__(self):
         return len(self.nav_db.traj_step_refer)
 
     def __getitem__(self, i):
         i_traj, j_instr, t_cur = self.nav_db.traj_step_refer[i]
-        
+
         inputs = self.nav_db.get_input(i_traj, j_instr, t_cur,
             return_ob=True, return_ob_action=True, 
-            return_hist_img_probs=False, return_ob_progress=True)
+            return_hist_img_probs=False, return_ob_progress=True,
+            return_objs=self.include_objects
+        )
 
         output = {}
 
@@ -432,6 +457,11 @@ class SarDataset(Dataset):
             output['hist_pano_img_fts'] = torch.from_numpy(inputs['hist_pano_img_fts'])
             output['hist_pano_ang_fts'] = torch.from_numpy(inputs['hist_pano_ang_fts'])
         output['hist_lens'] = inputs['hist_lens']
+
+        if 'obj_img_fts' in inputs:
+            output['obj_img_fts'] = torch.from_numpy(inputs['obj_img_fts'])
+            output['obj_ang_fts'] = torch.from_numpy(inputs['obj_ang_fts'])
+            output['obj_head_masks'] = torch.from_numpy(inputs['obj_head_masks'])
 
         return output
 
@@ -478,6 +508,17 @@ def sar_collate(inputs):
     # action batches
     batch['ob_action_angles'] = torch.FloatTensor(batch['ob_action_angles'])
     batch['ob_progress'] = torch.FloatTensor(batch['ob_progress'])
+
+    # object batches
+    if 'obj_img_fts' in batch:
+        batch['obj_img_fts'] = torch.stack(batch['obj_img_fts'])
+        batch['obj_ang_fts'] = torch.stack(batch['obj_ang_fts'])
+
+        # Mask out padding objects for one time step
+        batch['obj_head_masks'] = torch.stack(batch['obj_head_masks'])
+
+        # ! For time step padding, ob_masks are reused.
+
     return batch
 
 
@@ -494,6 +535,8 @@ class SprelDataset(Dataset):
         self.cls_token_id = self.tok.cls_token_id   # 101
         self.sep_token_id = self.tok.sep_token_id   # 102
         self.pad_token_id = self.tok.pad_token_id   # 0
+        
+        self.include_objects = bool(self.nav_db.obj_feat_file)
 
         self.sp_targets = np.zeros((36, 36, 2))    # each row: anchor viewindex (to all views)
         for i in range(36):
@@ -514,7 +557,7 @@ class SprelDataset(Dataset):
         inputs = self.nav_db.get_input(i_traj, j_instr, t_cur, 
             return_ob=True, return_ob_action=False, 
             return_hist_img_probs=False, return_ob_progress=False,
-            ob_cand_pano_view=False)
+            ob_cand_pano_view=False, return_objs=self.include_objects)
 
         output = {}
 
@@ -547,7 +590,12 @@ class SprelDataset(Dataset):
         sp_anchor_idx = np.random.randint(36)   # select a view as anchor
         output['sp_anchor_idxs'] = sp_anchor_idx
         output['sp_targets'] = self.sp_targets[sp_anchor_idx]
-        
+
+        if 'obj_img_fts' in inputs:
+            output['obj_img_fts'] = torch.from_numpy(inputs['obj_img_fts'])
+            output['obj_ang_fts'] = torch.from_numpy(inputs['obj_ang_fts'])
+            output['obj_head_masks'] = torch.from_numpy(inputs['obj_head_masks'])
+
         return output
 
     def _standardize_radians(self, x):
@@ -593,5 +641,184 @@ def sprel_collate(inputs):
     # action batches
     batch['sp_anchor_idxs'] = torch.LongTensor(batch['sp_anchor_idxs'])
     batch['sp_targets'] = torch.FloatTensor(batch['sp_targets'])
+
+    # object batches
+    if 'obj_img_fts' in batch:
+        batch['obj_img_fts'] = torch.stack(batch['obj_img_fts'])
+        batch['obj_ang_fts'] = torch.stack(batch['obj_ang_fts'])
+
+        # Mask out padding objects for one time step
+        batch['obj_head_masks'] = torch.stack(batch['obj_head_masks'])
+
+        # ! For time step padding, ob_masks are reused.
+
     return batch
 
+
+############### Object Prediction ###############
+
+class ObjDataset(Dataset):
+    def __init__(self, nav_db):
+        '''Spatial Relationship Regression'''
+        self.nav_db = nav_db
+        
+        self.include_objects = bool(self.nav_db.obj_feat_file)
+
+    def __len__(self):
+        return len(self.nav_db.traj_step_refer)
+
+    def __getitem__(self, i):
+        i_traj, j_instr, t_cur = self.nav_db.traj_step_refer[i]
+
+        inputs = self.nav_db.get_input(i_traj, j_instr, t_cur, 
+            return_ob=True, return_ob_action=False, 
+            return_hist_img_probs=False, return_ob_progress=False,
+            ob_cand_pano_view=False, return_objs=self.include_objects)
+
+        output = {}
+
+        # prepare text tensor
+        txt_ids = inputs['instr_encoding']
+        output['txt_ids'] = torch.LongTensor(txt_ids)
+        output['txt_lens'] = output['txt_ids'].size(0)
+        
+        # prepare history tensor
+        output['hist_img_fts'] = torch.from_numpy(inputs['hist_img_fts'])
+        output['hist_ang_fts'] = torch.from_numpy(inputs['hist_ang_fts'])
+        if 'hist_pano_img_fts' in inputs:
+            output['hist_pano_img_fts'] = torch.from_numpy(inputs['hist_pano_img_fts'])
+            output['hist_pano_ang_fts'] = torch.from_numpy(inputs['hist_pano_ang_fts'])
+        output['hist_lens'] = inputs['hist_lens']
+
+        if 'obj_img_fts' in inputs:
+            output['obj_img_fts'] = torch.from_numpy(inputs['obj_img_fts'])
+            output['obj_ang_fts'] = torch.from_numpy(inputs['obj_ang_fts'])
+            output['obj_head_masks'] = torch.from_numpy(inputs['obj_head_masks'])
+
+            # object labes
+            output['obj_labels'] = torch.from_numpy(inputs['obj_labels'])
+
+        return output
+        
+def obj_collate(inputs):
+    batch = {
+        k: [x[k] for x in inputs] for k in inputs[0].keys()
+    }
+    # text batches
+    batch['txt_ids'] = pad_sequence(batch['txt_ids'], batch_first=True, padding_value=0)
+    batch['txt_masks'] = torch.BoolTensor(gen_seq_masks(batch['txt_lens']))
+    batch['txt_lens'] = torch.LongTensor(batch['txt_lens'])
+
+    # history batches
+    if max(batch['hist_lens']) == 0:
+        # all are in first step
+        batch['hist_img_fts'] = None
+        batch['hist_ang_fts'] = None
+        if 'hist_pano_img_fts' in batch:
+            batch['hist_pano_img_fts'] = None
+            batch['hist_pano_ang_fts'] = None
+    else:
+        batch['hist_img_fts'] = pad_tensors(batch['hist_img_fts'], lens=batch['hist_lens'], pad=0)
+        batch['hist_ang_fts'] = pad_tensors(batch['hist_ang_fts'], lens=batch['hist_lens'], pad=0)
+        if 'hist_pano_img_fts' in batch:
+            batch['hist_pano_img_fts'] = pad_tensors(batch['hist_pano_img_fts'], lens=batch['hist_lens'], pad=0)
+            batch['hist_pano_ang_fts'] = pad_tensors(batch['hist_pano_ang_fts'], lens=batch['hist_lens'], pad=0)
+    batch['hist_lens'] = [x + 1 for x in batch['hist_lens']] # added a special token
+    batch['hist_masks'] = torch.BoolTensor(gen_seq_masks(batch['hist_lens']))
+    batch['hist_lens'] = torch.LongTensor(batch['hist_lens'])
+
+    # object batches
+    if 'obj_img_fts' in batch:
+        batch['obj_img_fts'] = torch.stack(batch['obj_img_fts'])
+        batch['obj_ang_fts'] = torch.stack(batch['obj_ang_fts'])
+
+        # Mask out padding objects for one time step
+        batch['obj_head_masks'] = torch.stack(batch['obj_head_masks'])
+
+        batch['obj_labels'] = torch.stack(batch['obj_labels'])
+
+    return batch
+
+############### Room Prediction ###############
+
+class RoomDataset(Dataset):
+    def __init__(self, nav_db):
+        '''Spatial Relationship Regression'''
+        self.nav_db = nav_db
+        
+        self.include_objects = bool(self.nav_db.obj_feat_file)
+
+    def __len__(self):
+        return len(self.nav_db.traj_step_refer)
+
+    def __getitem__(self, i):
+        i_traj, j_instr, t_cur = self.nav_db.traj_step_refer[i]
+
+        inputs = self.nav_db.get_input(i_traj, j_instr, t_cur, 
+            return_ob=True, return_ob_action=False, 
+            return_hist_img_probs=False, return_ob_progress=False,
+            ob_cand_pano_view=False, return_objs=self.include_objects)
+
+        output = {}
+
+        # prepare text tensor
+        txt_ids = inputs['instr_encoding']
+        output['txt_ids'] = torch.LongTensor(txt_ids)
+        output['txt_lens'] = output['txt_ids'].size(0)
+
+        # prepare history tensor
+        output['hist_img_fts'] = torch.from_numpy(inputs['hist_img_fts'])
+        output['hist_ang_fts'] = torch.from_numpy(inputs['hist_ang_fts'])
+        if 'hist_pano_img_fts' in inputs:
+            output['hist_pano_img_fts'] = torch.from_numpy(inputs['hist_pano_img_fts'])
+            output['hist_pano_ang_fts'] = torch.from_numpy(inputs['hist_pano_ang_fts'])
+        output['hist_lens'] = inputs['hist_lens']
+
+        if 'obj_img_fts' in inputs:
+            output['obj_img_fts'] = torch.from_numpy(inputs['obj_img_fts'])
+            output['obj_ang_fts'] = torch.from_numpy(inputs['obj_ang_fts'])
+            output['obj_head_masks'] = torch.from_numpy(inputs['obj_head_masks'])
+
+            # object labes
+            output['room_labels'] = torch.from_numpy(inputs['room_labels'])
+
+        return output
+        
+def room_collate(inputs):
+    batch = {
+        k: [x[k] for x in inputs] for k in inputs[0].keys()
+    }
+    # text batches
+    batch['txt_ids'] = pad_sequence(batch['txt_ids'], batch_first=True, padding_value=0)
+    batch['txt_masks'] = torch.BoolTensor(gen_seq_masks(batch['txt_lens']))
+    batch['txt_lens'] = torch.LongTensor(batch['txt_lens'])
+
+    # history batches
+    if max(batch['hist_lens']) == 0:
+        # all are in first step
+        batch['hist_img_fts'] = None
+        batch['hist_ang_fts'] = None
+        if 'hist_pano_img_fts' in batch:
+            batch['hist_pano_img_fts'] = None
+            batch['hist_pano_ang_fts'] = None
+    else:
+        batch['hist_img_fts'] = pad_tensors(batch['hist_img_fts'], lens=batch['hist_lens'], pad=0)
+        batch['hist_ang_fts'] = pad_tensors(batch['hist_ang_fts'], lens=batch['hist_lens'], pad=0)
+        if 'hist_pano_img_fts' in batch:
+            batch['hist_pano_img_fts'] = pad_tensors(batch['hist_pano_img_fts'], lens=batch['hist_lens'], pad=0)
+            batch['hist_pano_ang_fts'] = pad_tensors(batch['hist_pano_ang_fts'], lens=batch['hist_lens'], pad=0)
+    batch['hist_lens'] = [x + 1 for x in batch['hist_lens']] # added a special token
+    batch['hist_masks'] = torch.BoolTensor(gen_seq_masks(batch['hist_lens']))
+    batch['hist_lens'] = torch.LongTensor(batch['hist_lens'])
+
+    # object batches
+    if 'obj_img_fts' in batch:
+        batch['obj_img_fts'] = torch.stack(batch['obj_img_fts'])
+        batch['obj_ang_fts'] = torch.stack(batch['obj_ang_fts'])
+
+        # Mask out padding objects for one time step
+        batch['obj_head_masks'] = torch.stack(batch['obj_head_masks'])
+
+        batch['room_labels'] = torch.stack(batch['room_labels'])
+
+    return batch

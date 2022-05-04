@@ -3,12 +3,15 @@ R2R-style dataset
 '''
 import os
 import json
+from typing import List, Tuple
 import jsonlines
 import numpy as np
 import h5py
 import math
 
 import networkx as nx
+
+from utils.logger import LOGGER
 
 
 def angle_feature(heading, elevation, angle_feat_size):
@@ -98,10 +101,32 @@ class MultiStepNavData(object):
         image_prob_size=1000, image_feat_size=2048, angle_feat_size=4,
         max_txt_len=80, max_act_len=100,
         hist_enc_pano=True, val_sample_num=None,
-        in_memory=False, ob_cand_pano_view=False
+        in_memory=False, ob_cand_pano_view=False,
+        obj_feat_file=None, obj_sample_size=20,
+        obj_label_file=None, room_label_file=None,
+        room_annotation_file = None
     ):
         self.traj_files = traj_files
         self.img_ft_file = img_ft_file
+
+
+        self.obj_feat_file = obj_feat_file and h5py.File(obj_feat_file, 'r')
+        self.obj_sample_size = obj_sample_size
+
+        if obj_feat_file:
+            with open(obj_label_file) as f:
+                self.obj_labels = json.load(f)
+                self.obj_labels = { name: i for i, name in enumerate(self.obj_labels) }
+                
+            with open(room_label_file) as f:
+                self.room_labels = json.load(f)
+                self.room_labels = { name: i for i, name in enumerate(self.room_labels) }
+
+            with open(room_annotation_file) as f:
+                self.room_annotations = json.load(f)
+
+        if self.obj_feat_file:
+            LOGGER.info(f'Loading object features from {obj_feat_file} for {traj_files}')
 
         self.image_feat_size = image_feat_size
         self.image_prob_size = image_prob_size
@@ -147,7 +172,7 @@ class MultiStepNavData(object):
         self, i_path, j_instr, t_cur, 
         return_ob=False, return_hist_img_probs=False,
         return_ob_action=False, return_ob_progress=False,
-        ob_cand_pano_view=None
+        ob_cand_pano_view=None, return_objs=False,
     ):
         traj_data = self.traj_data[i_path]
         scan = traj_data['scan']
@@ -198,8 +223,37 @@ class MultiStepNavData(object):
                 outs['ob_action_angles'] = gt_angle
             if return_ob_progress:
                 outs['ob_progress'] = self.get_progress(scan, path[0], path[t_cur], path[-1] if 'guide_path' not in traj_data else traj_data['guide_path'][-1])
-            
+        
+        if return_objs:
+            obj_img_fts, obj_ang_fts, names, obj_masks = self.get_obj_feats(scan, path[t_cur], path_viewindex[t_cur])
+            outs['obj_img_fts'] = obj_img_fts
+            outs['obj_ang_fts'] = obj_ang_fts
+            outs['obj_head_masks'] = obj_masks
+            outs['obj_labels'] = names
+
+            outs['room_labels'] = self.get_viewpoint_room(scan, path[t_cur])
+
+        #! Aca salen los datos de un paso de la trajecotria (creo) en preentrenamiento
         return outs
+
+    def get_obj_feats(self, scan: str, viewpoint: str, viewindex: int):
+        feats, orients, names, mask = self.get_obj_feature(scan, viewpoint, self.obj_sample_size)
+
+
+        if len(orients) > 0:
+            base_heading = (viewindex % 12) * math.radians(30)
+            orients[:, 0] -= base_heading
+        
+        heading = orients[:, 0].squeeze()
+        elevation = orients[:, 1].squeeze()
+        angle_feats = np.array([
+                np.sin(heading), np.cos(heading),
+                np.sin(elevation), np.cos(elevation)
+                ] * (self.angle_feat_size // 4),
+            dtype=np.float32)
+        angle_feats = angle_feats.transpose((1, 0))
+        
+        return feats, angle_feats, names, mask
 
     def get_ob_pano_view(self, scan, path, path_viewindex, action_viewindex, rel_act_angles, t_cur):
         ob_img_feats = self.get_image_feature(scan, path[t_cur], pad_stop_token=True)[:, :self.image_feat_size]
@@ -313,6 +367,42 @@ class MultiStepNavData(object):
             return image_feats, angle_feats, pano_image_feats, pano_angle_feats, image_probs
         
         return image_feats, angle_feats, pano_image_feats, pano_angle_feats
+
+    def get_obj_feature(self, scan, viewpoint, sample_size) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+        roi = np.zeros((sample_size, self.image_feat_size), dtype=np.float32)
+        orients = np.zeros((sample_size, 2), dtype=np.float32)
+        names = np.zeros((sample_size, ), dtype=np.int64)
+        mask = np.zeros((sample_size, ), dtype=np.bool)
+
+        ds_path = f'{scan}/{viewpoint}'
+        if ds_path in self.obj_feat_file:
+            # If viewpoint isnt in the file, there are zero objects in it
+            obj_store = self.obj_feat_file[ds_path]
+            num_objs = len(obj_store['names'])
+
+            real_sample_size = min(sample_size, num_objs)
+            sample_indices: np.ndarray = np.random.choice(
+                np.arange(num_objs, dtype=np.int32),
+                real_sample_size,
+                replace=False,
+            )
+            sample_indices.sort()
+            
+            roi[:real_sample_size] = obj_store["features"][sample_indices]
+            orients[:real_sample_size] = obj_store["orients"][sample_indices]
+            mask[:real_sample_size] = np.ones((real_sample_size, ), dtype=np.bool)
+
+            str_names = obj_store["names"][sample_indices]
+            int_names = [self.obj_labels[name.decode('utf-8')] for name in str_names]
+            names[:real_sample_size] = int_names
+
+        return roi, orients, names, mask
+
+    def get_viewpoint_room(self, scan, viewpoint):
+        room = self.room_annotations[scan][viewpoint]
+        room_idx = self.room_labels[room]
+
+        return np.array([room_idx], dtype=np.int64)
 
     def get_image_feature(self, scan, viewpoint, pad_stop_token=False):
         key = '%s_%s' % (scan, viewpoint)

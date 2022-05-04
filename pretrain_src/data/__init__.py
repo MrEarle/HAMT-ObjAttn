@@ -6,7 +6,9 @@ from .r2r_tasks import (
     SarDataset, sar_collate,
     SprelDataset, sprel_collate,
     MrcDataset, mrc_collate,
-    ItmDataset, itm_collate
+    ItmDataset, itm_collate,
+    ObjDataset, obj_collate,
+    RoomDataset, room_collate,
 )
 
 from .loader import PrefetchLoader, MetaLoader, build_dataloader

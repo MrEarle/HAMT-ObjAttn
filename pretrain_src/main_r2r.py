@@ -32,6 +32,8 @@ from data import (
     SprelDataset, sprel_collate,
     MrcDataset, mrc_collate,
     ItmDataset, itm_collate,
+    ObjDataset, obj_collate,
+    RoomDataset, room_collate,
     MetaLoader, PrefetchLoader,
     build_dataloader)
 
@@ -75,6 +77,12 @@ def create_dataloaders(
         elif task_name == 'itm':
             task_dataset = ItmDataset(nav_db, tok)
             task_collate_fn = itm_collate
+        elif task_name == 'obj':
+            task_dataset = ObjDataset(nav_db)
+            task_collate_fn = obj_collate
+        elif task_name == 'room':
+            task_dataset = RoomDataset(nav_db)
+            task_collate_fn = room_collate
         else:
             raise ValueError(f'Undefined task {task}')
 
@@ -124,6 +132,7 @@ def main(opts):
     for train_dataset_config in opts.train_datasets.values():
         model_config.pretrain_tasks.extend(train_dataset_config['tasks'])
     model_config.pretrain_tasks = set(model_config.pretrain_tasks)
+    model_config.include_objects = opts.include_objects
 
     tokenizer = AutoTokenizer.from_pretrained(model_config.lang_bert_name)
 
@@ -151,6 +160,12 @@ def main(opts):
     model = wrap_model(model, device, opts.local_rank)
     del checkpoint
 
+    object_file = None
+    if opts.include_objects:
+        object_file = '/workspace1/mrearle/pth_vit_base_patch16_224_objects_no_logits.hdf5'
+
+    LOGGER.info(f'Using objects from {object_file}')
+
     # load r2r training set
     r2r_cfg = EasyDict(opts.train_datasets['R2R'])
     train_nav_db = MultiStepNavData(
@@ -163,6 +178,10 @@ def main(opts):
         hist_enc_pano=model_config.num_h_pano_layers>0, 
         ob_cand_pano_view=opts.ob_cand_pano_view,
         val_sample_num=None, in_memory=True,
+        obj_feat_file=object_file,
+        obj_label_file=r2r_cfg.obj_label_file,
+        room_label_file=r2r_cfg.room_label_file,
+        room_annotation_file=r2r_cfg.room_annotation_file,
     )
     val_nav_db = MultiStepNavData(
         r2r_cfg.val_seen_traj_files, r2r_cfg.img_ft_file,
@@ -174,6 +193,10 @@ def main(opts):
         hist_enc_pano=model_config.num_h_pano_layers>0, 
         ob_cand_pano_view=opts.ob_cand_pano_view,
         val_sample_num=opts.val_sample_num, in_memory=True,
+        obj_feat_file=object_file,
+        obj_label_file=r2r_cfg.obj_label_file,
+        room_label_file=r2r_cfg.room_label_file,
+        room_annotation_file=r2r_cfg.room_annotation_file,
     )
     val2_nav_db = MultiStepNavData(
         r2r_cfg.val_unseen_traj_files, r2r_cfg.img_ft_file,
@@ -185,6 +208,10 @@ def main(opts):
         hist_enc_pano=model_config.num_h_pano_layers>0, 
         ob_cand_pano_view=opts.ob_cand_pano_view,
         val_sample_num=opts.val_sample_num, in_memory=True,
+        obj_feat_file=object_file,
+        obj_label_file=r2r_cfg.obj_label_file,
+        room_label_file=r2r_cfg.room_label_file,
+        room_annotation_file=r2r_cfg.room_annotation_file,
     )
 
     # Build data loaders
@@ -332,6 +359,10 @@ def validate(model, val_dataloaders, setname=''):
             val_log = validate_mrc(model, loader)
         elif task.startswith('itm'):
             val_log = validate_itm(model, loader)
+        elif task.startswith('obj'):
+            val_log = validate_obj(model, loader)
+        elif task.startswith('room'):
+            val_log = validate_room(model, loader)
         else:
             raise ValueError(f'Undefined task {task}')
         val_log = {f'val{setname}_{task}_{k}': v for k, v in val_log.items()}
@@ -510,11 +541,67 @@ def validate_itm(model, val_loader):
                 f"acc: {acc*100:.2f}")
     return val_log
 
+@torch.no_grad()
+def validate_obj(model, val_loader):
+    LOGGER.info("start running OBJ validation...")
+    val_loss = 0
+    n_correct = 0
+    n_data = 0
+    st = time.time()
+    for i, batch in enumerate(val_loader):
+        scores = model(batch, task='obj', compute_loss=False)
+        labels = batch['obj_labels'].reshape((-1, ))
+        loss = F.cross_entropy(scores, labels, reduction='sum')
+        val_loss += loss.item()
+        n_correct += (scores.max(dim=-1)[1] == labels).sum().item()
+        n_data += labels.numel()
+    val_loss = sum(all_gather(val_loss))
+    n_correct = sum(all_gather(n_correct))
+    n_data = sum(all_gather(n_data))
+    tot_time = time.time()-st
+    val_loss /= n_data
+    acc = n_correct / n_data
+    val_log = {'loss': val_loss,
+               'acc': acc,
+               'tok_per_s': n_data/tot_time}
+    LOGGER.info(f"validation finished in {int(tot_time)} seconds, "
+                f"acc: {acc*100:.2f}")
+    return val_log
+
+@torch.no_grad()
+def validate_room(model, val_loader):
+    LOGGER.info("start running ROOM validation...")
+    val_loss = 0
+    n_correct = 0
+    n_data = 0
+    st = time.time()
+    for i, batch in enumerate(val_loader):
+        scores = model(batch, task='room', compute_loss=False)
+        labels = batch['room_labels'].squeeze()
+        loss = F.cross_entropy(scores, labels, reduction='sum')
+        val_loss += loss.item()
+        n_correct += (scores.max(dim=-1)[1] == labels).sum().item()
+        n_data += labels.numel()
+    val_loss = sum(all_gather(val_loss))
+    n_correct = sum(all_gather(n_correct))
+    n_data = sum(all_gather(n_data))
+    tot_time = time.time()-st
+    val_loss /= n_data
+    acc = n_correct / n_data
+    val_log = {'loss': val_loss,
+               'acc': acc,
+               'tok_per_s': n_data/tot_time}
+    LOGGER.info(f"validation finished in {int(tot_time)} seconds, "
+                f"acc: {acc*100:.2f}")
+    return val_log
+
 
 def build_args():
     parser = load_parser()
 
     opts = parse_with_config(parser)
+
+    print('Include objs:', opts.include_objects)
 
     if os.path.exists(opts.output_dir) and os.listdir(opts.output_dir):
         LOGGER.warning(

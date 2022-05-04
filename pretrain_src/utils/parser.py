@@ -123,6 +123,8 @@ def load_parser():
         help="Number of GPUs across all nodes",
     )
 
+    parser.add_argument("--include_objects", action="store_true")
+
     # can use config files
     parser.add_argument("--config", required=True, help="JSON config files")
 
