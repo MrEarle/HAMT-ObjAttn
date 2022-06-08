@@ -132,11 +132,13 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
     def forward(self, batch, task, compute_loss=True):
         batch = defaultdict(lambda: None, batch)
         if task.startswith('mlm'):
+            # :- No objects
             return self.forward_mlm(batch['txt_ids'], batch['txt_masks'], 
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
                                     batch['txt_labels'], compute_loss)
         elif task.startswith('sap'):
+            # :+ Use objects
             return self.forward_sap(batch['txt_ids'], batch['txt_masks'],
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
@@ -145,6 +147,7 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
                                     batch['obj_img_fts'], batch['obj_ang_fts'], batch['obj_head_masks'],
                                     batch['ob_action_viewindex'], compute_loss)
         elif task.startswith('sar'):
+            # :+ Use objects
             return self.forward_sar(batch['txt_ids'], batch['txt_masks'],
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
@@ -153,6 +156,7 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
                                     batch['obj_img_fts'], batch['obj_ang_fts'], batch['obj_head_masks'],
                                     batch['ob_action_angles'], batch['ob_progress'], compute_loss)
         elif task.startswith('sprel'):
+            # :+ Use objects
             return self.forward_sprel(batch['txt_ids'], batch['txt_masks'],
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
@@ -162,21 +166,25 @@ class MultiStepNavCMTPreTraining(BertPreTrainedModel):
                                     batch['sp_anchor_idxs'], batch['sp_targets'], 
                                     compute_loss)
         elif task.startswith('mrc'):
+            # :- No objects
             return self.forward_mrc(batch['txt_ids'], batch['txt_masks'],
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
                                     batch['hist_mrc_masks'], batch['hist_img_probs'], compute_loss)
         elif task.startswith('itm'):
+            # :- No objects
             return self.forward_itm(batch['txt_ids'], batch['txt_masks'],
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'], 4, compute_loss)
         elif task.startswith('obj'):
+            # :+ Use objects
             return self.forward_obj(batch['txt_ids'], batch['txt_masks'],
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],
                                     batch['obj_img_fts'], batch['obj_ang_fts'], batch['obj_head_masks'],
                                     batch['obj_labels'], compute_loss)
         elif task.startswith('room'):
+            # :+ Use objects
             return self.forward_room(batch['txt_ids'], batch['txt_masks'],
                                     batch['hist_img_fts'], batch['hist_ang_fts'],
                                     batch['hist_pano_img_fts'], batch['hist_pano_ang_fts'], batch['hist_masks'],

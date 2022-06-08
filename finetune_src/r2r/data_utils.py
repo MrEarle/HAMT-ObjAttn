@@ -1,5 +1,6 @@
 import os
 import json
+from typing import Tuple
 import jsonlines
 import h5py
 import networkx as nx
@@ -22,13 +23,50 @@ class ImageFeaturesDB(object):
                 self._feature_store[key] = ft
         return ft
 
+class ObjectFeaturesDB():
+    def __init__(self, obj_ft_file, image_feat_size, sample_size=20):
+        self.obj_feature_store = h5py.File(obj_ft_file, 'r')
+        self.sample_size = sample_size
+        self.image_feat_size = image_feat_size
+
+    def get_obj_feature(self, scan, viewpoint) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            feats = np.zeros((self.sample_size, self.image_feat_size), dtype=np.float32)
+            orients = np.zeros((self.sample_size, 2), dtype=np.float32)
+            mask = np.zeros((self.sample_size, ), dtype=np.bool)
+            str_names = np.array([b'test'] * self.sample_size)
+
+            ds_path = f'{scan}/{viewpoint}'
+            if ds_path in self.obj_feature_store:
+                # If viewpoint isnt in the file, there are zero objects in it
+                obj_store = self.obj_feature_store[ds_path]
+                num_objs = len(obj_store['names'])
+
+                real_sample_size = min(self.sample_size, num_objs)
+                sample_indices: np.ndarray = np.random.choice(
+                    np.arange(num_objs, dtype=np.int32),
+                    real_sample_size,
+                    replace=False,
+                )
+                sample_indices.sort()
+                
+                feats[:real_sample_size] = obj_store["features"][sample_indices]
+                orients[:real_sample_size] = obj_store["orients"][sample_indices]
+                str_names = obj_store["names"][sample_indices]
+                mask[:real_sample_size] = np.ones((real_sample_size, ), dtype=np.bool)
+
+            return feats, orients, mask, str_names
+
 
 def load_instr_datasets(anno_dir, dataset, splits):
     data = []
     for split in splits:
         if "/" not in split:    # the official splits
-            if dataset == 'r2r':
-                with open(os.path.join(anno_dir, 'R2R_%s_enc.json' % split)) as f:
+            if dataset in ['r2r', 'craft']:
+                file_name = 'R2R_%s_enc.json' % split
+                if dataset == 'craft' and split in ['train', 'val_unseen']:
+                    print(f'Loading {split} for craft dataset from {os.path.join(anno_dir, file_name)}', flush=True)
+                    file_name = 'R2R_craft_%s.json' % split
+                with open(os.path.join(anno_dir, file_name)) as f:
                     new_data = json.load(f)
             elif dataset == 'r2r_last':
                 with open(os.path.join(anno_dir, 'LastSent', 'R2R_%s_enc.json' % split)) as f:

@@ -9,7 +9,7 @@ def parse_args():
     parser.add_argument('--root_dir', type=str, default='../datasets')
     parser.add_argument(
         '--dataset', type=str, default='r2r', 
-        choices=['r2r', 'r4r', 'r2r_back', 'r2r_last', 'rxr']
+        choices=['r2r', 'r4r', 'r2r_back', 'r2r_last', 'rxr', 'craft']
     )
     parser.add_argument('--langs', nargs='+', default=None, choices=['en', 'hi', 'te'])
     parser.add_argument('--output_dir', type=str, default='default', help='experiment id')
@@ -48,7 +48,7 @@ def parse_args():
     parser.add_argument('--entropy_loss_weight', type=float, default=0.01)
     parser.add_argument("--teacher_weight", type=float, default=1.)
 
-    parser.add_argument("--features", type=str, default='places365')
+    parser.add_argument("--features", type=str, default='vitbase')
     parser.add_argument('--fix_lang_embedding', action='store_true', default=False)
     parser.add_argument('--fix_hist_embedding', action='store_true', default=False)
     parser.add_argument('--fix_obs_embedding', action='store_true', default=False)
@@ -99,6 +99,10 @@ def parse_args():
         type=str, help='batch or total'
     )
 
+    # Objects
+    parser.add_argument('--num_o_layers', type=int, default=0)
+    parser.add_argument('--include_objects', action='store_true', default=False)
+
     args, _ = parser.parse_known_args()
 
     args = postprocess_args(args)
@@ -137,7 +141,12 @@ def postprocess_args(args):
 
     # remove unnecessary args
     if args.dataset != 'rxr':
-        del args.langs
+        try:
+            del args.langs
+        except AttributeError:
+            pass
+
+    args.visualization_mode = False
 
     return args
 

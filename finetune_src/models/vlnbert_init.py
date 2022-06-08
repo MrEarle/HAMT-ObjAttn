@@ -36,8 +36,8 @@ def get_vlnbert_models(args, config=None):
         cfg_name = 'bert-base-uncased'
     vis_config = PretrainedConfig.from_pretrained(cfg_name)
 
-    if args.dataset == 'rxr' or args.tokenizer == 'xlm':
-        vis_config.type_vocab_size = 2
+    if args.dataset == 'rxr' or args.tokenizer == 'xlm' or args.include_objects:
+        vis_config.type_vocab_size = 4
     
     vis_config.max_action_steps = 100
     vis_config.image_feat_size = args.image_feat_size
@@ -61,6 +61,9 @@ def get_vlnbert_models(args, config=None):
     vis_config.act_pred_token = args.act_pred_token
     vis_config.max_action_steps = 50 
     vis_config.max_action_steps = 100
+
+    vis_config.num_o_layers = args.num_o_layers
+    vis_config.include_objects = args.include_objects
     
     visual_model = model_class.from_pretrained(
         pretrained_model_name_or_path=None, 

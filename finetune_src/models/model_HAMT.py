@@ -16,13 +16,19 @@ class VLNBertCMT(nn.Module):
 
         self.vln_bert = get_vlnbert_models(args, config=None)  # initialize the VLN-BERT
         self.drop_env = nn.Dropout(p=args.feat_dropout)
+
+        self.forward_args = None
+        self.vis_ids = None
         
     def forward(self, mode, txt_ids=None, txt_masks=None, txt_embeds=None, 
                 hist_img_feats=None, hist_ang_feats=None, 
                 hist_pano_img_feats=None, hist_pano_ang_feats=None,
                 hist_embeds=None, hist_lens=None, ob_step=None,
                 ob_img_feats=None, ob_ang_feats=None, ob_nav_types=None, 
-                ob_masks=None, return_states=False):
+                ob_masks=None,
+                obj_img_feats=None, obj_ang_feats=None, obj_masks=None,
+                return_states=False):
+        self.forward_args = locals()
 
         if mode == 'language':
             encoded_sentence = self.vln_bert(mode, txt_ids=txt_ids, txt_masks=txt_masks)
@@ -54,7 +60,8 @@ class VLNBertCMT(nn.Module):
                 mode, txt_embeds=txt_embeds, txt_masks=txt_masks,
                 hist_embeds=hist_embeds, hist_masks=hist_masks,
                 ob_img_feats=ob_img_feats, ob_ang_feats=ob_ang_feats, 
-                ob_nav_types=ob_nav_types, ob_masks=ob_masks)
+                ob_nav_types=ob_nav_types, ob_masks=ob_masks,
+                obj_img_feats=obj_img_feats, obj_ang_feats=obj_ang_feats, obj_masks=obj_masks)
 
             if return_states:
                 if self.args.no_lang_ca:

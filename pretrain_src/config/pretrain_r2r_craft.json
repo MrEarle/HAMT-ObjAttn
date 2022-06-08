@@ -6,8 +6,8 @@
   "ob_random_kill_a": 0.43,
   "mrc_mask_prob": 0.15,
   "max_txt_len": 100,
-  "train_batch_size": 32,
-  "val_batch_size": 32,
+  "train_batch_size": 16,
+  "val_batch_size": 16,
   "gradient_accumulation_steps": 1,
   "learning_rate": 5e-05,
   "valid_steps": 5000,
@@ -33,14 +33,13 @@
     "R2R": {
       "name": "R2R",
       "train_traj_files": [
-        "datasets/R2R/annotations/pretrain/train.jsonl",
-        "datasets/R2R/annotations/pretrain/train_prevalent_generated.jsonl"
+        "datasets/R2R/annotations/pretrain/R2R_craft_train.jsonl"
       ],
       "val_seen_traj_files": [
         "datasets/R2R/annotations/pretrain/val_seen.jsonl"
       ],
       "val_unseen_traj_files": [
-        "datasets/R2R/annotations/pretrain/val_unseen.jsonl"
+        "datasets/R2R/annotations/pretrain/R2R_craft_val_unseen.jsonl"
       ],
       "img_ft_file": "datasets/R2R/features/pth_vit_base_patch16_224_imagenet.hdf5",
       "scanvp_cands_file": "datasets/R2R/annotations/scanvp_candview_relangles.json",
@@ -54,9 +53,7 @@
         "sar",
         "sprel",
         "mrc",
-        "itm",
-        "obj",
-        "room"
+        "itm"
       ],
       "mix_ratio": [
         5,
@@ -64,9 +61,7 @@
         1,
         1,
         2,
-        2,
-        1,
-        1
+        2
       ]
     }
   }

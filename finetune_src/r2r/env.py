@@ -2,14 +2,17 @@
 
 import json
 import os
+from typing import List, Tuple
 import numpy as np
 import math
 import random
 import networkx as nx
+import h5py
 from collections import defaultdict
 
 import MatterSim
 
+from r2r.data_utils import ObjectFeaturesDB, ImageFeaturesDB
 from r2r.data_utils import load_nav_graphs
 from r2r.data_utils import new_simulator
 from r2r.data_utils import angle_feature, get_all_point_angle_feature
@@ -23,7 +26,7 @@ class EnvBatch(object):
     ''' A simple wrapper for a batch of MatterSim environments,
         using discretized viewpoints and pretrained features '''
 
-    def __init__(self, connectivity_dir, scan_data_dir=None, feat_db=None, batch_size=100):
+    def __init__(self, connectivity_dir, scan_data_dir=None, feat_db: ImageFeaturesDB=None, batch_size=100, object_feat_db: ObjectFeaturesDB = None):
         """
         1. Load pretrained image feature
         2. Init the Simulator.
@@ -31,6 +34,7 @@ class EnvBatch(object):
         :param batch_size:  Used to create the simulator list.
         """
         self.feat_db = feat_db
+        self.objs_db = object_feat_db
         self.image_w = 640
         self.image_h = 480
         self.vfov = 60
@@ -70,6 +74,17 @@ class EnvBatch(object):
             feature_states.append((feature, state))
         return feature_states
 
+    def getViewpointObjects(
+        self, scanId: str, viewpointId: str
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Get the list of object features in the current viewpoint.
+        :param scanId:
+        :param viewpointId:
+        :return: Tensor with the features of each object in the viewpoint
+        """
+        return self.objs_db.get_obj_feature(scanId, viewpointId)
+
     def makeActions(self, actions):
         ''' Take an action using the full state dependent action interface (with batched input).
             Every action element should be an (index, heading, elevation) tuple. '''
@@ -83,10 +98,13 @@ class R2RBatch(object):
     def __init__(
         self, feat_db, instr_data, connectivity_dir,
         batch_size=64, angle_feat_size=4,
-        seed=0, name=None, sel_data_idxs=None
+        seed=0, name=None, sel_data_idxs=None,
+        object_feat_db: h5py.File = None, config=None
     ):
-        self.env = EnvBatch(connectivity_dir, feat_db=feat_db, batch_size=batch_size)
-
+        self.env = EnvBatch(connectivity_dir, feat_db=feat_db, batch_size=batch_size, object_feat_db=object_feat_db)
+        if config is None:
+            print(f'Config is None -> {config}', flush=True)
+        self.config = config
         self.data = instr_data
         self.scans = set([x['scan'] for x in self.data])
         # to evaluate full data
@@ -251,6 +269,33 @@ class R2RBatch(object):
                 candidate_new.append(c_new)
             return candidate_new
 
+    
+    def make_objs(self, scanId: str, viewpointId: str, view_index: int) -> dict:
+        if not self.config.include_objects:
+            return {}
+
+        agent_head = (view_index % 12) * math.radians(30)
+        agent_el = ((view_index // 12) - 1) * math.radians(30)
+
+        feat_array, orient_array, mask_array, str_names = self.env.getViewpointObjects(scanId, viewpointId)
+
+        original_orients_agent = orient_array.copy()
+        if len(original_orients_agent) > 0:
+            original_orients_agent[:, 0] -= agent_head
+            original_orients_agent[:, 1] -= agent_el
+
+        orient_feat = np.array([angle_feature(head, elev, self.angle_feat_size) for (head, elev) in original_orients_agent])
+
+        obj_dict = {
+            "feats": feat_array,
+            "orients": orient_feat,
+            "masks": mask_array,
+            "names": str_names,
+            "original_orients": original_orients_agent
+        }
+
+        return obj_dict
+
     def _teacher_path_action(self, state, path, t=None, shortest_teacher=False):
         if shortest_teacher:
             return self._shortest_path_action(state, path[-1])
@@ -281,6 +326,9 @@ class R2RBatch(object):
             # [visual_feature, angle_feature] for views
             feature = np.concatenate((feature, self.angle_feature[base_view_id]), -1)
 
+            # Object features
+            obj_dict = self.make_objs(state.scanId, state.location.viewpointId, state.viewIndex)
+
             obs.append({
                 'instr_id' : item['instr_id'],
                 'scan' : state.scanId,
@@ -294,7 +342,8 @@ class R2RBatch(object):
                 'instruction' : item['instruction'],
                 'teacher' : self._teacher_path_action(state, item['path'], t=t, shortest_teacher=shortest_teacher),
                 'gt_path' : item['path'],
-                'path_id' : item['path_id']
+                'path_id' : item['path_id'],
+                'objects' : obj_dict
             })
             if 'instr_encoding' in item:
                 obs[-1]['instr_encoding'] = item['instr_encoding']

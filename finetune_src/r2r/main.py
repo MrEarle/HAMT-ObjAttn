@@ -17,16 +17,18 @@ from models.vlnbert_init import get_tokenizer
 from r2r.agent_cmt import Seq2SeqCMTAgent
 
 from r2r.agent_r2rback import Seq2SeqBackAgent
-from r2r.data_utils import ImageFeaturesDB, construct_instrs
+from r2r.data_utils import ImageFeaturesDB, ObjectFeaturesDB, construct_instrs
 from r2r.env import R2RBatch, R2RBackBatch
 from r2r.parser import parse_args
 
 
 
 def build_dataset(args, rank=0, is_test=False):
+    print('building dataset with config', args)
     tok = get_tokenizer(args)
 
     feat_db = ImageFeaturesDB(args.img_ft_file, args.image_feat_size)
+    obj_feat_db = ObjectFeaturesDB('/workspace1/mrearle/pth_vit_base_patch16_224_objects_no_logits.hdf5', args.image_feat_size)
 
     if args.dataset == 'r2r_back':
         dataset_class = R2RBackBatch
@@ -42,7 +44,7 @@ def build_dataset(args, rank=0, is_test=False):
     train_env = dataset_class(
         feat_db, train_instr_data, args.connectivity_dir, batch_size=args.batch_size, 
         angle_feat_size=args.angle_feat_size, seed=args.seed+rank,
-        sel_data_idxs=None, name='train'
+        sel_data_idxs=None, name='train', object_feat_db=obj_feat_db, config=args
     )
     if args.aug is not None:
         aug_instr_data = construct_instrs(
@@ -51,7 +53,7 @@ def build_dataset(args, rank=0, is_test=False):
         aug_env = dataset_class(
             feat_db, aug_instr_data, args.connectivity_dir, batch_size=args.batch_size, 
             angle_feat_size=args.angle_feat_size, seed=args.seed+rank,
-            sel_data_idxs=None, name='aug'
+            sel_data_idxs=None, name='aug', object_feat_db=obj_feat_db, config=args
         )
     else:
         aug_env = None
@@ -76,7 +78,8 @@ def build_dataset(args, rank=0, is_test=False):
         val_env = dataset_class(
             feat_db, val_instr_data, args.connectivity_dir, batch_size=args.batch_size, 
             angle_feat_size=args.angle_feat_size, seed=args.seed+rank,
-            sel_data_idxs=None if args.world_size < 2 else (rank, args.world_size), name=split
+            sel_data_idxs=None if args.world_size < 2 else (rank, args.world_size), name=split,
+            config=args, object_feat_db=obj_feat_db
         )
         val_envs[split] = val_env
 

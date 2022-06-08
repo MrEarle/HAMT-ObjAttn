@@ -33,14 +33,13 @@
     "R2R": {
       "name": "R2R",
       "train_traj_files": [
-        "datasets/R2R/annotations/pretrain/train.jsonl",
-        "datasets/R2R/annotations/pretrain/train_prevalent_generated.jsonl"
+        "datasets/R2R/annotations/pretrain/R2R_craft_train.jsonl"
       ],
       "val_seen_traj_files": [
         "datasets/R2R/annotations/pretrain/val_seen.jsonl"
       ],
       "val_unseen_traj_files": [
-        "datasets/R2R/annotations/pretrain/val_unseen.jsonl"
+        "datasets/R2R/annotations/pretrain/R2R_craft_val_unseen.jsonl"
       ],
       "img_ft_file": "datasets/R2R/features/pth_vit_base_patch16_224_imagenet.hdf5",
       "scanvp_cands_file": "datasets/R2R/annotations/scanvp_candview_relangles.json",

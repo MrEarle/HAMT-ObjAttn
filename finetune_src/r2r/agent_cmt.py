@@ -189,6 +189,22 @@ class Seq2SeqCMTAgent(BaseAgent):
 
         return hist_img_feats, hist_pano_img_feats, hist_pano_ang_feats
 
+    def _object_varaiable(self, obs, sample_size=20):
+        obj_feats = np.zeros((len(obs), sample_size, self.args.image_feat_size), dtype=np.float32)
+        obj_orien = np.zeros((len(obs), sample_size, self.args.angle_feat_size), dtype=np.float32)
+        obj_masks = np.zeros((len(obs), sample_size), dtype=np.bool)
+        for i, ob in enumerate(obs):
+            obj_dict = ob['objects']
+            obj_feats[i] = obj_dict['feats']
+            obj_orien[i] = obj_dict['orients']
+            obj_masks[i] = obj_dict['masks']
+
+        return (
+            torch.from_numpy(obj_feats).cuda(),
+            torch.from_numpy(obj_orien).cuda(),
+            torch.from_numpy(obj_masks).cuda(),
+        )
+
     def _teacher_action(self, obs, ended):
         """
         Extract teacher actions into variable.
@@ -312,6 +328,24 @@ class Seq2SeqCMTAgent(BaseAgent):
             elif self.args.ob_type == 'cand':
                 ob_img_feats, ob_ang_feats, ob_nav_types, ob_cand_lens = self._candidate_variable(obs)
                 ob_masks = length2mask(ob_cand_lens).logical_not()
+
+            if self.args.visualization_mode:
+                self.vln_bert.vis_ids = {
+                    'instr_id': [ob['instr_id'] for ob in obs],
+                    'scan': [ob['scan'] for ob in obs],
+                    'viewpoint': [ob['viewpoint'] for ob in obs],
+                    'heading': [ob['heading'] for ob in obs],
+                    'instruction': [ob['instruction'] for ob in obs],
+                    'txt_ids': txt_ids.tolist(),
+                    'view_ids': [[cand['viewpointId'] for cand in ob['candidate']] for ob in obs],
+                    'view_angles': [[(cand['heading'], cand['elevation']) for cand in ob['candidate']] for ob in obs],
+                    'obj_ids': [ob['objects']['names'].tolist() for ob in obs],
+                    'obj_angles': [ob['objects']['original_orients'].tolist() for ob in obs],
+                }
+
+            obj_feats, obj_orients, obj_masks = None, None, None
+            if self.args.include_objects:
+                obj_feats, obj_orients, obj_masks = self._object_varaiable(obs)
             
             ''' Visual BERT '''
             visual_inputs = {
@@ -324,10 +358,14 @@ class Seq2SeqCMTAgent(BaseAgent):
                 'ob_ang_feats': ob_ang_feats,
                 'ob_nav_types': ob_nav_types,
                 'ob_masks': ob_masks,
+                'obj_img_feats': obj_feats,
+                'obj_ang_feats': obj_orients,
+                'obj_masks': obj_masks,
                 'return_states': True if self.feedback == 'sample' else False
             }
                             
             t_outputs = self.vln_bert(**visual_inputs)
+
             logit = t_outputs[0]
             if self.feedback == 'sample':
                 h_t = t_outputs[1]
@@ -458,6 +496,10 @@ class Seq2SeqCMTAgent(BaseAgent):
                 ob_img_feats, ob_ang_feats, ob_nav_types, ob_cand_lens = self._candidate_variable(obs)
                 ob_masks = length2mask(ob_cand_lens).logical_not()
 
+            obj_feats, obj_orients, obj_masks = None, None, None
+            if self.args.include_objects:
+                obj_feats, obj_orients, obj_masks = self._object_varaiable(obs)
+
             ''' Visual BERT '''
             visual_inputs = {
                 'mode': 'visual',
@@ -469,6 +511,9 @@ class Seq2SeqCMTAgent(BaseAgent):
                 'ob_ang_feats': ob_ang_feats,
                 'ob_nav_types': ob_nav_types,
                 'ob_masks': ob_masks,
+                'obj_img_feats': obj_feats,
+                'obj_ang_feats': obj_orients,
+                'obj_masks': obj_masks,
                 'return_states': True
             }
             _, last_h_ = self.vln_bert(**visual_inputs)
@@ -538,6 +583,17 @@ class Seq2SeqCMTAgent(BaseAgent):
             self.vln_bert.eval()
             self.critic.eval()
         super().test(iters=iters)
+
+    def test_cb(self, use_dropout=False, feedback='argmax', allow_cheat=False, iters=None, callback=None):
+        ''' Evaluate once on each instruction in the current environment '''
+        self.feedback = feedback
+        if use_dropout:
+            self.vln_bert.train()
+            self.critic.train()
+        else:
+            self.vln_bert.eval()
+            self.critic.eval()
+        super().test_cb(iters=iters, callback=callback)
 
     def zero_grad(self):
         self.loss = 0.

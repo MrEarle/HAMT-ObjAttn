@@ -13,3 +13,6 @@ datasets
 !datasets/.gitkeep
 mattersim_build
 slurm/
+data
+*.ipynb
+.ipynb_checkpoints

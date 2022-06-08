@@ -46,4 +46,33 @@ class BaseAgent(object):
                 if looped:
                     break
 
+    
+    def test_cb(self, iters=None, callback=None, **kwargs):
+        self.env.reset_epoch(shuffle=(iters is not None))   # If iters is not none, shuffle the env batch
+        self.losses = []
+        self.results = {}
+        # We rely on env showing the entire batch before repeating anything
+        looped = False
+        self.loss = 0
+        if iters is not None:
+            # For each time, it will run the first 'iters' iterations. (It was shuffled before)
+            for i in range(iters):
+                for traj in self.rollout(**kwargs):
+                    self.loss = 0
+                    self.results[traj['instr_id']] = traj
+                    if callback is not None:
+                        callback(traj)
+        else:   # Do a full round
+            while True:
+                for traj in self.rollout(**kwargs):
+                    if traj['instr_id'] in self.results:
+                        looped = True
+                    else:
+                        self.loss = 0
+                        self.results[traj['instr_id']] = traj
+                        if callback is not None:
+                            callback(traj)
+                if looped:
+                    break
+
 
